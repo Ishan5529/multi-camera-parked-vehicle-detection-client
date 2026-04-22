@@ -10,6 +10,7 @@ function createCamera(id, index) {
     index,
     name: `Camera ${index + 1}`,
     deviceId: '',
+    annotations: [],
   };
 }
 
