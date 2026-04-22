@@ -1,11 +1,30 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { captureVideoFrame } from '../utils/captureVideoFrame';
 
+function getPreviewDimensions(width, height) {
+  const fallbackDimensions = { width: 240, height: 135 };
+
+  if (!width || !height) {
+    return fallbackDimensions;
+  }
+
+  const maxWidth = 600;
+  const maxHeight = 600;
+  const scale = Math.min(maxWidth / width, maxHeight / height, 1);
+
+  return {
+    width: Math.max(120, Math.round(width * scale)),
+    height: Math.max(90, Math.round(height * scale)),
+  };
+}
+
 const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRemove, availableDevices }, ref) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const [status, setStatus] = useState('Ready to connect');
   const [error, setError] = useState('');
+  const [videoResolution, setVideoResolution] = useState({ width: 0, height: 0 });
+  const previewDimensions = getPreviewDimensions(videoResolution.width, videoResolution.height);
 
   useEffect(() => {
     let isMounted = true;
@@ -42,6 +61,13 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
+
+          if (videoRef.current.videoWidth && videoRef.current.videoHeight) {
+            setVideoResolution({
+              width: videoRef.current.videoWidth,
+              height: videoRef.current.videoHeight,
+            });
+          }
         }
 
         setStatus('Camera live');
@@ -53,8 +79,23 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
 
     connectCamera();
 
+    function handleLoadedMetadata() {
+      if (!videoRef.current) {
+        return;
+      }
+
+      setVideoResolution({
+        width: videoRef.current.videoWidth,
+        height: videoRef.current.videoHeight,
+      });
+    }
+
+    const activeVideoElement = videoRef.current;
+    activeVideoElement?.addEventListener('loadedmetadata', handleLoadedMetadata);
+
     return () => {
       isMounted = false;
+      activeVideoElement?.removeEventListener('loadedmetadata', handleLoadedMetadata);
 
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
@@ -76,6 +117,9 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Camera {camera.index + 1}</p>
           <h3 className="mt-2 text-xl font-bold text-white">{camera.name}</h3>
           <p className="mt-1 text-sm text-slate-400">{status}</p>
+          {videoResolution.width > 0 && videoResolution.height > 0 ? (
+            <p className="mt-1 text-xs text-slate-500">{videoResolution.width} x {videoResolution.height}</p>
+          ) : null}
           {error ? <p className="mt-2 text-sm text-rose-300">{error}</p> : null}
         </div>
 
@@ -89,13 +133,16 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
-        <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900/80">
+        <div
+          className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900/80"
+          style={{ width: `${previewDimensions.width}px`, height: `${previewDimensions.height}px` }}
+        >
           <video
             ref={videoRef}
             autoPlay
             muted
             playsInline
-            className="h-72 w-full object-cover"
+            className="h-full w-full object-contain"
           />
         </div>
 

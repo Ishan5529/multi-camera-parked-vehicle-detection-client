@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import CameraCard from '../components/CameraCard';
 import { sendPredictSnapshots } from '../api';
+import { loadParkingSetupConfig, saveParkingSetupConfig } from '../services/parkingSetupConfig';
 
 function createCamera(id, index) {
   return {
@@ -17,11 +18,20 @@ function createCameraId() {
 }
 
 function ParkingSetup() {
-  const [cameras, setCameras] = useState([createCamera(createCameraId(), 0)]);
+  const [cameras, setCameras] = useState(() => loadParkingSetupConfig());
   const [availableDevices, setAvailableDevices] = useState([]);
-  const [message, setMessage] = useState('Add one or more cameras, then the app will ping the backend every 5 seconds.');
+  const [message, setMessage] = useState('No camera added yet. Click "Add camera" to start setup.');
   const [error, setError] = useState('');
   const cameraRefs = useRef({});
+
+  useEffect(() => {
+    saveParkingSetupConfig(cameras);
+
+    if (!cameras.length) {
+      setError('');
+      setMessage('No camera added yet. Click "Add camera" to start setup.');
+    }
+  }, [cameras]);
 
   useEffect(() => {
     let isMounted = true;
@@ -167,6 +177,15 @@ function ParkingSetup() {
           </div>
 
           <div className="mt-6 space-y-5">
+            {cameras.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-white/20 bg-slate-900/40 p-8 text-center">
+                <p className="text-lg font-semibold text-slate-200">No camera view is configured yet.</p>
+                <p className="mt-2 text-sm text-slate-400">
+                  Use the <span className="font-semibold text-sky-300">Add camera</span> button to create the first camera configuration.
+                </p>
+              </div>
+            ) : null}
+
             {cameras.map((camera) => (
               <CameraCard
                 key={camera.id}
