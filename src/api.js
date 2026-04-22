@@ -4,6 +4,48 @@ export function getBackendBaseUrl() {
   return rawBackendBaseUrl.replace(/\/$/, '');
 }
 
+export async function updateParkingConfiguration(config) {
+  const baseUrl = getBackendBaseUrl();
+
+  if (!baseUrl) {
+    throw new Error('REACT_APP_BACKEND_BASE_URL is not set.');
+  }
+
+  const parkingLotName = String(config?.parkingLotName || '').trim();
+  const parkingLotAddress = String(config?.parkingLotAddress || '').trim();
+  const uuid = String(config?.configUuid || config?.uuid || '').trim();
+
+  const response = await fetch(`${baseUrl}/update_config`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      uuid,
+      configUuid: uuid,
+      config_uuid: uuid,
+      parkingLotName,
+      parkingLotAddress,
+      parking_lot_name: parkingLotName,
+      parking_lot_address: parkingLotAddress,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Failed to update parking configuration.');
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    return response.json();
+  }
+
+  const responseUuid = (await response.text()).trim();
+  return { uuid: responseUuid };
+}
+
 function normalizeCoordinates(annotations) {
   if (!Array.isArray(annotations)) {
     return [];
@@ -47,7 +89,7 @@ function normalizeSnapshotsForPredict(snapshots) {
     .filter(Boolean);
 }
 
-export async function sendPredictSnapshots(snapshots) {
+export async function sendPredictSnapshots(snapshots, configUuid) {
   const baseUrl = getBackendBaseUrl();
 
   if (!baseUrl) {
@@ -62,6 +104,7 @@ export async function sendPredictSnapshots(snapshots) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
+      uuid: configUuid,
       snapshots: normalizedSnapshots,
     }),
   });

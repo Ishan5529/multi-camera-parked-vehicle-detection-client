@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import CameraCard from '../components/CameraCard';
-import { sendPredictSnapshots } from '../api';
-import { loadParkingSetupConfig, saveParkingSetupConfig } from '../services/parkingSetupConfig';
+import { sendPredictSnapshots, updateParkingConfiguration } from '../api';
+import {
+  loadParkingLotConfig,
+  loadParkingSetupConfig,
+  saveParkingLotConfig,
+  saveParkingSetupConfig,
+} from '../services/parkingSetupConfig';
 
 function createCamera(id, index) {
   return {
@@ -20,9 +25,14 @@ function createCameraId() {
 
 function ParkingSetup() {
   const [cameras, setCameras] = useState(() => loadParkingSetupConfig());
+  const [parkingLotConfig, setParkingLotConfig] = useState(() => loadParkingLotConfig());
   const [availableDevices, setAvailableDevices] = useState([]);
   const [message, setMessage] = useState('No camera added yet. Click "Add camera" to start setup.');
   const [error, setError] = useState('');
+  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [configFormError, setConfigFormError] = useState('');
+  const [configFormMessage, setConfigFormMessage] = useState('');
   const cameraRefs = useRef({});
 
   useEffect(() => {
@@ -61,6 +71,12 @@ function ParkingSetup() {
   }, []);
 
   useEffect(() => {
+    if (!parkingLotConfig.configUuid) {
+      setError('');
+      setMessage('Save parking lot configurations first to start camera polling.');
+      return undefined;
+    }
+
     if (!cameras.length) {
       return undefined;
     }
@@ -106,7 +122,7 @@ function ParkingSetup() {
       }
 
       try {
-        await sendPredictSnapshots(snapshots);
+        await sendPredictSnapshots(snapshots, parkingLotConfig.configUuid);
         setError('');
         setMessage(`Sent ${snapshots.length} camera snapshot${snapshots.length === 1 ? '' : 's'} to the backend.`);
       } catch (sendError) {
@@ -115,7 +131,65 @@ function ParkingSetup() {
     }, 5000);
 
     return () => window.clearInterval(intervalId);
-  }, [cameras]);
+  }, [cameras, parkingLotConfig.configUuid]);
+
+  function handleConfigFieldChange(field, value) {
+    setParkingLotConfig((currentConfig) => ({
+      ...currentConfig,
+      [field]: value,
+    }));
+
+    if (configFormError) {
+      setConfigFormError('');
+    }
+  }
+
+  async function saveConfigurations(event) {
+    event.preventDefault();
+
+    const parkingLotName = parkingLotConfig.parkingLotName.trim();
+    const parkingLotAddress = parkingLotConfig.parkingLotAddress.trim();
+
+    if (!parkingLotName || !parkingLotAddress) {
+      setConfigFormError('Parking lot name and address are required.');
+      return;
+    }
+
+    setIsSavingConfig(true);
+    setConfigFormError('');
+    setConfigFormMessage('');
+
+    try {
+      const response = await updateParkingConfiguration({
+        parkingLotName,
+        parkingLotAddress,
+        configUuid: parkingLotConfig.configUuid || '',
+      });
+
+      const receivedUuid = String(response?.uuid || response?.configUuid || '').trim();
+
+      if (!receivedUuid) {
+        throw new Error('Backend did not return a uuid.');
+      }
+
+      const nextConfig = {
+        parkingLotName,
+        parkingLotAddress,
+        configUuid: receivedUuid,
+      };
+
+      setParkingLotConfig(nextConfig);
+      saveParkingLotConfig(nextConfig);
+      setConfigFormMessage('Configurations saved successfully.');
+      setIsConfigModalOpen(false);
+      setMessage('Configuration saved. Polling will begin once live camera feeds are available.');
+      setError('');
+    } catch (saveError) {
+      setConfigFormError(saveError.message || 'Unable to save parking lot configurations.');
+    } finally {
+      setIsSavingConfig(false);
+    }
+  }
 
   function addCamera() {
     setCameras((currentCameras) => {
@@ -164,12 +238,26 @@ function ParkingSetup() {
             </p>
           </div>
 
-          <Link
-            to="/"
-            className="inline-flex w-fit rounded-xl bg-emerald-500 px-5 py-3 font-semibold text-slate-950 transition hover:bg-emerald-400"
-          >
-            Back to home
-          </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setConfigFormError('');
+                setConfigFormMessage('');
+                setIsConfigModalOpen(true);
+              }}
+              className="inline-flex w-fit rounded-xl border border-sky-400/50 bg-sky-500/10 px-5 py-3 font-semibold text-sky-200 transition hover:bg-sky-500/20"
+            >
+              Configurations
+            </button>
+
+            <Link
+              to="/"
+              className="inline-flex w-fit rounded-xl bg-emerald-500 px-5 py-3 font-semibold text-slate-950 transition hover:bg-emerald-400"
+            >
+              Back to home
+            </Link>
+          </div>
         </div>
 
         <section className="mt-8 rounded-3xl border border-white/10 bg-white/5 p-5">
@@ -218,6 +306,84 @@ function ParkingSetup() {
           </div>
         </section>
       </main>
+
+      {isConfigModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 px-4 py-8">
+          <div className="w-full max-w-xl rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-2xl font-bold text-white">Parking lot configurations</h3>
+                <p className="mt-1 text-sm text-slate-300">
+                  Save this once to receive and store the backend uuid required for polling.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsConfigModalOpen(false)}
+                className="rounded-lg border border-white/15 px-3 py-1 text-sm font-semibold text-slate-200 transition hover:bg-white/10"
+              >
+                Close
+              </button>
+            </div>
+
+            <form className="mt-6 space-y-4" onSubmit={saveConfigurations}>
+              <div>
+                <label htmlFor="parking-lot-name" className="mb-2 block text-sm font-semibold text-slate-200">
+                  Parking lot name
+                </label>
+                <input
+                  id="parking-lot-name"
+                  type="text"
+                  value={parkingLotConfig.parkingLotName}
+                  onChange={(event) => handleConfigFieldChange('parkingLotName', event.target.value)}
+                  className="w-full rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-slate-100 outline-none transition focus:border-sky-400"
+                  placeholder="e.g. Downtown Lot A"
+                  required
+                />
+              </div>
+
+              <div>
+                <label htmlFor="parking-lot-address" className="mb-2 block text-sm font-semibold text-slate-200">
+                  Parking lot address
+                </label>
+                <textarea
+                  id="parking-lot-address"
+                  value={parkingLotConfig.parkingLotAddress}
+                  onChange={(event) => handleConfigFieldChange('parkingLotAddress', event.target.value)}
+                  className="min-h-28 w-full rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-slate-100 outline-none transition focus:border-sky-400"
+                  placeholder="e.g. 123 Main St, Springfield"
+                  required
+                />
+              </div>
+
+              {parkingLotConfig.configUuid ? (
+                <p className="text-xs text-emerald-300">Saved uuid: {parkingLotConfig.configUuid}</p>
+              ) : null}
+
+              {configFormError ? <p className="text-sm text-rose-300">{configFormError}</p> : null}
+              {configFormMessage ? <p className="text-sm text-emerald-300">{configFormMessage}</p> : null}
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsConfigModalOpen(false)}
+                  className="rounded-xl border border-white/15 px-4 py-2 font-semibold text-slate-200 transition hover:bg-white/10"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingConfig}
+                  className="rounded-xl bg-sky-500 px-5 py-2 font-semibold text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isSavingConfig ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
