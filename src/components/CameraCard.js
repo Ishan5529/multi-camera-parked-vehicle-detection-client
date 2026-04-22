@@ -1,6 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { captureVideoFrame } from '../utils/captureVideoFrame';
 
+const MIN_ANNOTATION_SIZE = 0.01;
+const TOAST_DURATION_MS = 3000;
+
 function getPreviewDimensions(width, height) {
   const fallbackDimensions = { width: 240, height: 135 };
 
@@ -93,20 +96,109 @@ function getRelativePoint(event, containerElement, videoResolution) {
   };
 }
 
-function renderAnnotationBoxes(annotations, draftAnnotation) {
+function boxesOverlap(boxA, boxB) {
+  const aRight = boxA.x + boxA.width;
+  const aBottom = boxA.y + boxA.height;
+  const bRight = boxB.x + boxB.width;
+  const bBottom = boxB.y + boxB.height;
+
+  return boxA.x < bRight && aRight > boxB.x && boxA.y < bBottom && aBottom > boxB.y;
+}
+
+function hasOverlapWithExisting(newBox, existingBoxes) {
+  return existingBoxes.some((annotation) => boxesOverlap(newBox, annotation));
+}
+
+function normalizeRotation(value) {
+  const rotation = Number(value);
+
+  if (!Number.isFinite(rotation)) {
+    return 0;
+  }
+
+  return ((rotation % 360) + 360) % 360;
+}
+
+function renderAnnotationBoxes({
+  annotations,
+  draftAnnotation,
+  interactive = false,
+  selectedAnnotationId = null,
+  onSelectAnnotation,
+  onStartMove,
+  onStartResize,
+  onStartRotate,
+  onDeleteAnnotation,
+}) {
   return (
     <>
-      {annotations.map((annotation) => (
+      {annotations.map((annotation, index) => (
         <div
           key={annotation.id}
-          className="pointer-events-none absolute border-2 border-red-500 bg-transparent"
+          className={`absolute ${interactive ? 'pointer-events-auto cursor-move' : 'pointer-events-none'}`}
           style={{
             left: `${annotation.x * 100}%`,
             top: `${annotation.y * 100}%`,
             width: `${annotation.width * 100}%`,
             height: `${annotation.height * 100}%`,
+            transform: `rotate(${normalizeRotation(annotation.rotation)}deg)`,
+            transformOrigin: 'center',
           }}
-        />
+          onMouseDown={interactive
+            ? (event) => {
+              event.stopPropagation();
+              onSelectAnnotation?.(annotation.id);
+              onStartMove?.(event, annotation);
+            }
+            : undefined}
+        >
+          <div className={`absolute inset-0 border-2 bg-transparent ${selectedAnnotationId === annotation.id ? 'border-red-300' : 'border-red-500'}`} />
+
+          {interactive ? (
+            <span className="pointer-events-none absolute left-1 top-1 rounded bg-slate-950/90 px-1.5 py-0.5 text-[10px] font-semibold text-red-200">
+              Box {index + 1}
+            </span>
+          ) : null}
+
+          {interactive && selectedAnnotationId === annotation.id ? (
+            <>
+              <div className="absolute left-1/2 -top-5 h-3 w-0.5 -translate-x-1/2 bg-red-300" />
+              <button
+                type="button"
+                className="absolute left-1/2 -top-5 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border border-red-300 bg-slate-900 active:cursor-grabbing"
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                  onSelectAnnotation?.(annotation.id);
+                  onStartRotate?.(event, annotation);
+                }}
+                aria-label="Rotate annotation"
+              />
+
+              <button
+                type="button"
+                className="absolute -right-2 -top-2 flex h-5 w-5 items-center justify-center rounded-full border border-red-400 bg-slate-950 text-xs font-bold text-red-300"
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDeleteAnnotation?.(annotation.id);
+                }}
+              >
+                x
+              </button>
+
+              <div
+                className="absolute -bottom-1.5 -right-1.5 h-3 w-3 cursor-nwse-resize border border-red-300 bg-slate-900"
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                  onSelectAnnotation?.(annotation.id);
+                  onStartResize?.(event, annotation);
+                }}
+              />
+            </>
+          ) : null}
+        </div>
       ))}
 
       {draftAnnotation ? (
@@ -136,7 +228,10 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStartPoint, setDrawStartPoint] = useState(null);
   const [draftAnnotation, setDraftAnnotation] = useState(null);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState(null);
+  const [activeEdit, setActiveEdit] = useState(null);
   const [modalViewportSize, setModalViewportSize] = useState({ width: 0, height: 0 });
+  const [toastMessage, setToastMessage] = useState('');
   const annotations = Array.isArray(camera.annotations) ? camera.annotations : [];
   const previewDimensions = getPreviewDimensions(videoResolution.width, videoResolution.height);
   const modalDimensions = getPreviewDimensions(videoResolution.width, videoResolution.height);
@@ -272,6 +367,35 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
     return () => observer.disconnect();
   }, [isModalOpen]);
 
+  useEffect(() => {
+    if (!isModalOpen || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [isModalOpen]);
+
+  useEffect(() => {
+    if (!toastMessage) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setToastMessage('');
+    }, TOAST_DURATION_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [toastMessage]);
+
   useImperativeHandle(ref, () => ({
     captureSnapshot() {
       return captureVideoFrame(videoRef.current);
@@ -285,7 +409,7 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
   }
 
   function startDrawing(event) {
-    if (event.button !== 0) {
+    if (event.button !== 0 || activeEdit) {
       return;
     }
 
@@ -298,6 +422,7 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
     setIsDrawing(true);
     setDrawStartPoint(point);
     setDraftAnnotation({ x: point.x, y: point.y, width: 0, height: 0 });
+    setSelectedAnnotationId(null);
   }
 
   function moveDrawing(event) {
@@ -314,7 +439,109 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
     setDraftAnnotation(getBoxFromPoints(drawStartPoint, point));
   }
 
+  function startMoveAnnotation(event, annotation) {
+    const point = getRelativePoint(event, modalViewportRef.current, videoResolution);
+
+    if (!point) {
+      return;
+    }
+
+    setActiveEdit({
+      mode: 'move',
+      annotation,
+      startPoint: point,
+    });
+  }
+
+  function startResizeAnnotation(event, annotation) {
+    const point = getRelativePoint(event, modalViewportRef.current, videoResolution);
+
+    if (!point) {
+      return;
+    }
+
+    setActiveEdit({
+      mode: 'resize',
+      annotation,
+      startPoint: point,
+    });
+  }
+
+  function startRotateAnnotation(event, annotation) {
+    const point = getRelativePoint(event, modalViewportRef.current, videoResolution);
+
+    if (!point) {
+      return;
+    }
+
+    setActiveEdit({
+      mode: 'rotate',
+      annotation,
+      startPoint: point,
+    });
+  }
+
+  function updateAnnotation(annotationId, updates) {
+    onCameraChange(camera.id, {
+      annotations: annotations.map((annotation) =>
+        annotation.id === annotationId ? { ...annotation, ...updates } : annotation,
+      ),
+    });
+  }
+
+  function moveOrResizeAnnotation(event) {
+    if (!activeEdit) {
+      return;
+    }
+
+    const point = getRelativePoint(event, modalViewportRef.current, videoResolution);
+
+    if (!point) {
+      return;
+    }
+
+    const { annotation, startPoint, mode } = activeEdit;
+
+    if (mode === 'move') {
+      const deltaX = point.x - startPoint.x;
+      const deltaY = point.y - startPoint.y;
+
+      const nextX = Math.min(Math.max(annotation.x + deltaX, 0), 1 - annotation.width);
+      const nextY = Math.min(Math.max(annotation.y + deltaY, 0), 1 - annotation.height);
+
+      updateAnnotation(annotation.id, { x: nextX, y: nextY });
+      return;
+    }
+
+    if (mode === 'resize') {
+      const nextWidth = Math.min(
+        Math.max(point.x - annotation.x, MIN_ANNOTATION_SIZE),
+        1 - annotation.x,
+      );
+      const nextHeight = Math.min(
+        Math.max(point.y - annotation.y, MIN_ANNOTATION_SIZE),
+        1 - annotation.y,
+      );
+
+      updateAnnotation(annotation.id, { width: nextWidth, height: nextHeight });
+      return;
+    }
+
+    if (mode === 'rotate') {
+      const centerX = annotation.x + annotation.width / 2;
+      const centerY = annotation.y + annotation.height / 2;
+      const radians = Math.atan2(point.y - centerY, point.x - centerX);
+      const degrees = (radians * 180) / Math.PI + 90;
+      updateAnnotation(annotation.id, { rotation: normalizeRotation(degrees) });
+    }
+  }
+
   function finishDrawing(event) {
+    if (activeEdit) {
+      setActiveEdit(null);
+      return;
+    }
+
     if (!isDrawing || !drawStartPoint) {
       return;
     }
@@ -322,10 +549,14 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
     const point = getRelativePoint(event, modalViewportRef.current, videoResolution);
     const nextBox = point ? getBoxFromPoints(drawStartPoint, point) : null;
 
-    if (nextBox && nextBox.width > 0.01 && nextBox.height > 0.01) {
-      onCameraChange(camera.id, {
-        annotations: [...annotations, { ...nextBox, id: createAnnotationId() }],
-      });
+    if (nextBox && nextBox.width > MIN_ANNOTATION_SIZE && nextBox.height > MIN_ANNOTATION_SIZE) {
+      if (hasOverlapWithExisting(nextBox, annotations)) {
+        setToastMessage('Overlapping boxes are not allowed. The new box was removed.');
+      } else {
+        onCameraChange(camera.id, {
+          annotations: [...annotations, { ...nextBox, id: createAnnotationId(), rotation: 0 }],
+        });
+      }
     }
 
     setIsDrawing(false);
@@ -335,12 +566,24 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
 
   function clearAnnotations() {
     onCameraChange(camera.id, { annotations: [] });
+    setSelectedAnnotationId(null);
+  }
+
+  function deleteAnnotation(annotationId) {
+    onCameraChange(camera.id, {
+      annotations: annotations.filter((annotation) => annotation.id !== annotationId),
+    });
+    if (selectedAnnotationId === annotationId) {
+      setSelectedAnnotationId(null);
+    }
   }
 
   function closeModal() {
     setIsDrawing(false);
     setDrawStartPoint(null);
     setDraftAnnotation(null);
+    setSelectedAnnotationId(null);
+    setActiveEdit(null);
     setIsModalOpen(false);
   }
 
@@ -390,7 +633,7 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
               height: `${previewContainedRect.height}px`,
             }}
           >
-            {renderAnnotationBoxes(annotations, null)}
+            {renderAnnotationBoxes({ annotations, draftAnnotation: null })}
           </div>
         </div>
 
@@ -426,8 +669,16 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
       </section>
 
       {isModalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 p-4">
-          <div className="w-full max-w-[1280px] rounded-3xl border border-white/10 bg-slate-900/90 p-5 shadow-2xl shadow-black/60">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/95 p-4">
+          {toastMessage ? (
+            <div className="pointer-events-none fixed right-4 top-4 z-[60] flex flex-col gap-2">
+              <div className="rounded-xl border border-red-400/70 bg-slate-950/95 px-4 py-3 text-sm font-semibold text-red-200 shadow-xl">
+                {toastMessage}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="my-4 w-full max-w-[1280px] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl border border-white/10 bg-slate-900/90 p-5 shadow-2xl shadow-black/60">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">Annotation mode</p>
@@ -454,15 +705,13 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
 
             <div className="mt-4">
               <p className="mb-2 text-sm text-slate-300">
-                Draw tool: click and drag on the video to add a box. Added boxes stay visible in preview and are saved in configuration.
+                Draw tool: click and drag to add a box. Edit tool: drag a box to move, use the corner handle to resize, and drag the top handle to rotate.
               </p>
 
               <div
                 ref={modalViewportRef}
                 className="relative mx-auto overflow-hidden rounded-2xl border border-white/10 bg-black"
                 style={{ width: `${modalWidth}px`, height: `${modalHeight}px`, maxWidth: '92vw', maxHeight: '78vh' }}
-                onMouseDown={startDrawing}
-                onMouseMove={moveDrawing}
                 onMouseUp={finishDrawing}
                 onMouseLeave={finishDrawing}
               >
@@ -481,8 +730,62 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
                     width: `${modalContainedRect.width}px`,
                     height: `${modalContainedRect.height}px`,
                   }}
+                  onMouseDown={startDrawing}
+                  onMouseMove={(event) => {
+                    moveOrResizeAnnotation(event);
+                    moveDrawing(event);
+                  }}
+                  onMouseUp={finishDrawing}
+                  onMouseLeave={finishDrawing}
                 >
-                  {renderAnnotationBoxes(annotations, draftAnnotation)}
+                  {renderAnnotationBoxes({
+                    annotations,
+                    draftAnnotation,
+                    interactive: true,
+                    selectedAnnotationId,
+                    onSelectAnnotation: setSelectedAnnotationId,
+                    onStartMove: startMoveAnnotation,
+                    onStartResize: startResizeAnnotation,
+                    onStartRotate: startRotateAnnotation,
+                    onDeleteAnnotation: deleteAnnotation,
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+                <p className="text-sm font-semibold text-slate-200">Annotations</p>
+                <div className="mt-3 space-y-2">
+                  {annotations.length === 0 ? (
+                    <p className="text-sm text-slate-400">No annotations added yet.</p>
+                  ) : null}
+
+                  {annotations.map((annotation, index) => (
+                    <div
+                      key={`row-${annotation.id}`}
+                      className={`rounded-xl border px-3 py-2 text-sm ${selectedAnnotationId === annotation.id ? 'border-red-400/60 bg-red-500/10 text-red-200' : 'border-white/10 bg-slate-900/60 text-slate-200'}`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <button
+                          type="button"
+                          className="text-left"
+                          onClick={() => setSelectedAnnotationId(annotation.id)}
+                        >
+                          Box {index + 1}
+                        </button>
+                        <p className="text-xs text-slate-300">{Math.round(normalizeRotation(annotation.rotation))} deg</p>
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className="rounded-lg border border-red-400/50 px-2 py-1 text-xs font-semibold text-red-200 transition hover:bg-red-500/20"
+                          onClick={() => deleteAnnotation(annotation.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

@@ -1,5 +1,15 @@
 const PARKING_SETUP_STORAGE_KEY = 'parking_setup_cameras_v1';
 
+function normalizeRotation(value) {
+  const rotation = Number(value);
+
+  if (!Number.isFinite(rotation)) {
+    return 0;
+  }
+
+  return ((rotation % 360) + 360) % 360;
+}
+
 function normalizeAnnotations(annotations) {
   if (!Array.isArray(annotations)) {
     return [];
@@ -27,6 +37,7 @@ function normalizeAnnotations(annotations) {
         y: clampedY,
         width: clampedWidth,
         height: clampedHeight,
+        rotation: normalizeRotation(annotation?.rotation),
       };
     })
     .filter(Boolean);
