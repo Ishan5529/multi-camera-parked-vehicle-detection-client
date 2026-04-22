@@ -24,10 +24,12 @@ function RecenterMap({ center }) {
 
 function Driver() {
   const [searchInput, setSearchInput] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
   const [userLocation, setUserLocation] = useState(null);
   const [currentLocation, setCurrentLocation] = useState(null);
   const [hasSearchedLocation, setHasSearchedLocation] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [locationError, setLocationError] = useState('');
 
   useEffect(() => {
@@ -70,15 +72,74 @@ function Driver() {
     return currentLocation || userLocation || DEFAULT_CENTER;
   }, [currentLocation, userLocation]);
 
+  useEffect(() => {
+    const query = searchInput.trim();
+
+    if (!query) {
+      setSearchResults([]);
+      setIsLoadingSuggestions(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timerId = setTimeout(async () => {
+      setIsLoadingSuggestions(true);
+
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
+          { signal: controller.signal }
+        );
+
+        if (!response.ok) {
+          throw new Error('Location suggestion fetch failed.');
+        }
+
+        const results = await response.json();
+        setSearchResults(results.slice(0, 5));
+      } catch (error) {
+        if (error.name !== 'AbortError') {
+          setSearchResults([]);
+        }
+      } finally {
+        setIsLoadingSuggestions(false);
+      }
+    }, 300);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timerId);
+    };
+  }, [searchInput]);
+
+  const applySelectedLocation = (result) => {
+    const nextLocation = {
+      lat: Number(result.lat),
+      lng: Number(result.lon),
+    };
+
+    setSearchInput(result.display_name);
+    setHasSearchedLocation(true);
+    setCurrentLocation(nextLocation);
+    setSearchResults([]);
+    setLocationError('');
+  };
+
   const handleSearchLocation = async (event) => {
     event.preventDefault();
 
     const query = searchInput.trim();
     if (!query) {
       setHasSearchedLocation(false);
+      setSearchResults([]);
       if (userLocation) {
         setCurrentLocation(userLocation);
       }
+      return;
+    }
+
+    if (searchResults.length) {
+      applySelectedLocation(searchResults[0]);
       return;
     }
 
@@ -108,6 +169,7 @@ function Driver() {
 
       setHasSearchedLocation(true);
       setCurrentLocation(nextLocation);
+      setSearchResults(results.slice(0, 5));
     } catch (error) {
       setLocationError(error.message || 'Something went wrong while searching.');
     } finally {
@@ -137,14 +199,38 @@ function Driver() {
               Back to home
             </Link>
 
-            <form onSubmit={handleSearchLocation} className="flex items-center gap-2">
-              <input
-                type="text"
-                value={searchInput}
-                onChange={(event) => setSearchInput(event.target.value)}
-                placeholder="Search location"
-                className="w-56 rounded-xl border border-white/20 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none"
-              />
+            <form onSubmit={handleSearchLocation} className="relative flex items-start gap-2">
+              <div className="relative w-72">
+                <input
+                  type="text"
+                  value={searchInput}
+                  onChange={(event) => setSearchInput(event.target.value)}
+                  placeholder="Search location"
+                  className="w-full rounded-xl border border-white/20 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none"
+                />
+
+                {searchInput.trim() ? (
+                  <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-[1000] overflow-hidden rounded-xl border border-white/15 bg-slate-900/95 shadow-2xl backdrop-blur">
+                    {isLoadingSuggestions ? (
+                      <p className="px-3 py-2 text-xs text-slate-300">Searching suggestions...</p>
+                    ) : searchResults.length ? (
+                      searchResults.map((result) => (
+                        <button
+                          key={`${result.place_id}-${result.lat}-${result.lon}`}
+                          type="button"
+                          onClick={() => applySelectedLocation(result)}
+                          className="block w-full border-b border-white/10 px-3 py-2 text-left text-xs text-slate-100 transition hover:bg-slate-800/90 last:border-b-0"
+                        >
+                          {result.display_name}
+                        </button>
+                      ))
+                    ) : (
+                      <p className="px-3 py-2 text-xs text-slate-300">No matches</p>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+
               <button
                 type="submit"
                 disabled={isSearching}
