@@ -26,6 +26,7 @@ function Driver() {
   const [searchInput, setSearchInput] = useState('');
   const [userLocation, setUserLocation] = useState(null);
   const [currentLocation, setCurrentLocation] = useState(null);
+  const [hasSearchedLocation, setHasSearchedLocation] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [locationError, setLocationError] = useState('');
 
@@ -35,7 +36,11 @@ function Driver() {
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
+    if (hasSearchedLocation || isSearching) {
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
       (position) => {
         const location = {
           lat: position.coords.latitude,
@@ -52,9 +57,14 @@ function Driver() {
       {
         enableHighAccuracy: true,
         timeout: 10000,
+        maximumAge: 5000,
       }
     );
-  }, []);
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [hasSearchedLocation, isSearching]);
 
   const mapCenter = useMemo(() => {
     return currentLocation || userLocation || DEFAULT_CENTER;
@@ -65,6 +75,7 @@ function Driver() {
 
     const query = searchInput.trim();
     if (!query) {
+      setHasSearchedLocation(false);
       if (userLocation) {
         setCurrentLocation(userLocation);
       }
@@ -95,6 +106,7 @@ function Driver() {
         lng: Number(results[0].lon),
       };
 
+      setHasSearchedLocation(true);
       setCurrentLocation(nextLocation);
     } catch (error) {
       setLocationError(error.message || 'Something went wrong while searching.');
