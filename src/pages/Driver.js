@@ -135,7 +135,7 @@ function Driver() {
   }, [searchInput]);
 
   useEffect(() => {
-    if (!userLocation) {
+    if (!currentLocation) {
       setParkingLots([]);
       return undefined;
     }
@@ -148,7 +148,7 @@ function Driver() {
           setIsLoadingParkingLots(true);
         }
 
-        const lots = await fetchNearbyParkingLots(userLocation);
+        const lots = await fetchNearbyParkingLots(currentLocation);
 
         if (isMounted) {
           setParkingLots(lots);
@@ -172,7 +172,7 @@ function Driver() {
       isMounted = false;
       window.clearInterval(intervalId);
     };
-  }, [userLocation]);
+  }, [currentLocation]);
 
   const applySelectedLocation = (result) => {
     const nextLocation = {
@@ -360,7 +360,11 @@ function Driver() {
                       <p className="text-xs">Vacant slots: {parkingLot.vacantSlots}</p>
                       <p className="text-xs">Coordinates: {parkingLot.lat.toFixed(6)}, {parkingLot.lng.toFixed(6)}</p>
                       <a
-                        href={`https://www.google.com/maps/dir/?api=1&destination=${parkingLot.lat},${parkingLot.lng}`}
+                        href={`https://www.google.com/maps/dir/?api=1${
+                          currentLocation
+                            ? `&origin=${currentLocation.lat},${currentLocation.lng}`
+                            : ''
+                        }&destination=${parkingLot.lat},${parkingLot.lng}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="mt-2 inline-flex rounded-md bg-sky-500 px-2.5 py-1 text-xs font-semibold text-slate-950 transition hover:bg-sky-400"
