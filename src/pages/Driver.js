@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import L from 'leaflet';
 import { MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
+import { fetchNearbyParkingLots } from '../api';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -11,6 +12,24 @@ L.Icon.Default.mergeOptions({
 });
 
 const DEFAULT_CENTER = { lat: 20.5937, lng: 78.9629 };
+
+const vacantParkingIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+
+const fullParkingIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-red.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
 
 function RecenterMap({ center }) {
   const map = useMap();
@@ -31,6 +50,9 @@ function Driver() {
   const [isSearching, setIsSearching] = useState(false);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
   const [locationError, setLocationError] = useState('');
+  const [parkingLots, setParkingLots] = useState([]);
+  const [isLoadingParkingLots, setIsLoadingParkingLots] = useState(false);
+  const [parkingLotError, setParkingLotError] = useState('');
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -111,6 +133,46 @@ function Driver() {
       clearTimeout(timerId);
     };
   }, [searchInput]);
+
+  useEffect(() => {
+    if (!userLocation) {
+      setParkingLots([]);
+      return undefined;
+    }
+
+    let isMounted = true;
+
+    const fetchParkingLots = async () => {
+      try {
+        if (isMounted) {
+          setIsLoadingParkingLots(true);
+        }
+
+        const lots = await fetchNearbyParkingLots(userLocation);
+
+        if (isMounted) {
+          setParkingLots(lots);
+          setParkingLotError('');
+        }
+      } catch (error) {
+        if (isMounted) {
+          setParkingLotError(error.message || 'Unable to fetch nearby parking lots.');
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingParkingLots(false);
+        }
+      }
+    };
+
+    fetchParkingLots();
+    const intervalId = window.setInterval(fetchParkingLots, 10000);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [userLocation]);
 
   const applySelectedLocation = (result) => {
     const nextLocation = {
@@ -248,7 +310,12 @@ function Driver() {
             ? `${currentLocation.lat.toFixed(6)}, ${currentLocation.lng.toFixed(6)}`
             : 'Waiting for location access'}
         </p>
+        <p className="mt-1 text-xs text-slate-300 sm:text-sm">
+          Nearby lots: {parkingLots.length}
+          {isLoadingParkingLots ? ' (refreshing...)' : ''}
+        </p>
         {locationError ? <p className="mt-1 text-xs text-rose-300 sm:text-sm">{locationError}</p> : null}
+        {parkingLotError ? <p className="mt-1 text-xs text-rose-300 sm:text-sm">{parkingLotError}</p> : null}
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 min-h-0 px-6 pb-6">
@@ -277,6 +344,26 @@ function Driver() {
                 <Popup>current_location</Popup>
               </Marker>
             ) : null}
+
+            {parkingLots.map((parkingLot) => {
+              const hasVacantSlots = parkingLot.vacantSlots > 0;
+
+              return (
+                <Marker
+                  key={parkingLot.id}
+                  position={[parkingLot.lat, parkingLot.lng]}
+                  icon={hasVacantSlots ? vacantParkingIcon : fullParkingIcon}
+                >
+                  <Popup>
+                    <div className="min-w-[160px] text-slate-900">
+                      <p className="text-sm font-semibold">{parkingLot.name}</p>
+                      <p className="text-xs">Vacant slots: {parkingLot.vacantSlots}</p>
+                      <p className="text-xs">Coordinates: {parkingLot.lat.toFixed(6)}, {parkingLot.lng.toFixed(6)}</p>
+                    </div>
+                  </Popup>
+                </Marker>
+              );
+            })}
           </MapContainer>
         </section>
       </main>

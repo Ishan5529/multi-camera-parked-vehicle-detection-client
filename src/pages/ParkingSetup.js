@@ -216,7 +216,10 @@ function ParkingSetup() {
             return currentPoint;
           }
 
-          handleConfigFieldChange('parkingLotAddress', formatCoordinates(location));
+          setParkingLotConfig((currentConfig) => ({
+            ...currentConfig,
+            parkingLotAddress: formatCoordinates(location),
+          }));
           return location;
         });
       },

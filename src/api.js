@@ -122,3 +122,79 @@ export async function sendPredictSnapshots(snapshots, configUuid) {
 
   return null;
 }
+
+function normalizeParkingLot(rawLot, index) {
+  if (!rawLot || typeof rawLot !== 'object') {
+    return null;
+  }
+
+  const lat = Number(rawLot.lat ?? rawLot.latitude ?? rawLot.parking_lat ?? rawLot.parkingLotLat);
+  const lng = Number(rawLot.lng ?? rawLot.lon ?? rawLot.longitude ?? rawLot.parking_lng ?? rawLot.parkingLotLng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  const name = String(rawLot.name ?? rawLot.parkingLotName ?? rawLot.parking_lot_name ?? `Parking lot ${index + 1}`);
+  const vacantSlots = Number(rawLot.vacantSlots ?? rawLot.vacant_slots ?? rawLot.availableSlots ?? rawLot.available_slots ?? 0);
+
+  return {
+    id: String(rawLot.id ?? rawLot.uuid ?? rawLot.configUuid ?? `${name}-${index}`),
+    name,
+    lat,
+    lng,
+    vacantSlots: Number.isFinite(vacantSlots) ? vacantSlots : 0,
+  };
+}
+
+export async function fetchNearbyParkingLots(currentLocation) {
+  const baseUrl = getBackendBaseUrl();
+
+  if (!baseUrl) {
+    throw new Error('REACT_APP_BACKEND_BASE_URL is not set.');
+  }
+
+  const latitude = Number(currentLocation?.lat);
+  const longitude = Number(currentLocation?.lng);
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new Error('Current location coordinates are invalid.');
+  }
+
+  const response = await fetch(`${baseUrl}/fetch_parking`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      lat: latitude,
+      lng: longitude,
+      latitude,
+      longitude,
+      current_location: {
+        lat: latitude,
+        lng: longitude,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText || 'Failed to fetch nearby parking lots.');
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+
+  if (!contentType.includes('application/json')) {
+    return [];
+  }
+
+  const payload = await response.json();
+  const lots = payload?.parkingLots || payload?.parking_lots || payload?.lots || payload?.data || [];
+
+  if (!Array.isArray(lots)) {
+    return [];
+  }
+
+  return lots.map(normalizeParkingLot).filter(Boolean);
+}
