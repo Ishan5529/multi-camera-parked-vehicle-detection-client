@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import L from 'leaflet';
+import { MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import CameraCard from '../components/CameraCard';
 import { sendPredictSnapshots, updateParkingConfiguration } from '../api';
 import {
@@ -8,6 +10,58 @@ import {
   saveParkingLotConfig,
   saveParkingSetupConfig,
 } from '../services/parkingSetupConfig';
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
+
+const DEFAULT_CENTER = { lat: 20.5937, lng: 78.9629 };
+
+function parseCoordinateAddress(value) {
+  const match = String(value || '')
+    .trim()
+    .match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  return { lat, lng };
+}
+
+function formatCoordinates(coordinates) {
+  return `${coordinates.lat.toFixed(6)}, ${coordinates.lng.toFixed(6)}`;
+}
+
+function RecenterMap({ center }) {
+  const map = useMap();
+
+  useEffect(() => {
+    map.setView([center.lat, center.lng], map.getZoom(), { animate: true });
+  }, [center, map]);
+
+  return null;
+}
+
+function MapClickHandler({ onSelectPoint }) {
+  useMapEvents({
+    click(event) {
+      onSelectPoint({ lat: event.latlng.lat, lng: event.latlng.lng });
+    },
+  });
+
+  return null;
+}
 
 function createCamera(id, index) {
   return {
@@ -26,6 +80,13 @@ function createCameraId() {
 function ParkingSetup() {
   const [cameras, setCameras] = useState(() => loadParkingSetupConfig());
   const [parkingLotConfig, setParkingLotConfig] = useState(() => loadParkingLotConfig());
+  const [selectedPoint, setSelectedPoint] = useState(() => parseCoordinateAddress(loadParkingLotConfig().parkingLotAddress));
+  const [isMapPickerOpen, setIsMapPickerOpen] = useState(false);
+  const [pickerUserLocation, setPickerUserLocation] = useState(null);
+  const [pickerSearchInput, setPickerSearchInput] = useState('');
+  const [pickerSearchResults, setPickerSearchResults] = useState([]);
+  const [pickerSearchError, setPickerSearchError] = useState('');
+  const [isLoadingPickerResults, setIsLoadingPickerResults] = useState(false);
   const [availableDevices, setAvailableDevices] = useState([]);
   const [message, setMessage] = useState('No camera added yet. Click "Add camera" to start setup.');
   const [error, setError] = useState('');
@@ -34,6 +95,10 @@ function ParkingSetup() {
   const [configFormError, setConfigFormError] = useState('');
   const [configFormMessage, setConfigFormMessage] = useState('');
   const cameraRefs = useRef({});
+
+  const pickerMapCenter = useMemo(() => {
+    return selectedPoint || pickerUserLocation || DEFAULT_CENTER;
+  }, [selectedPoint, pickerUserLocation]);
 
   useEffect(() => {
     saveParkingSetupConfig(cameras);
@@ -133,6 +198,80 @@ function ParkingSetup() {
     return () => window.clearInterval(intervalId);
   }, [cameras, parkingLotConfig.configUuid]);
 
+  useEffect(() => {
+    if (!isMapPickerOpen || !navigator.geolocation) {
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const location = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        };
+
+        setPickerUserLocation(location);
+        setSelectedPoint((currentPoint) => {
+          if (currentPoint || String(parkingLotConfig.parkingLotAddress || '').trim()) {
+            return currentPoint;
+          }
+
+          handleConfigFieldChange('parkingLotAddress', formatCoordinates(location));
+          return location;
+        });
+      },
+      () => {
+        setPickerUserLocation(null);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+      }
+    );
+  }, [isMapPickerOpen, parkingLotConfig.parkingLotAddress]);
+
+  useEffect(() => {
+    const query = pickerSearchInput.trim();
+
+    if (!isMapPickerOpen || !query) {
+      setPickerSearchResults([]);
+      setIsLoadingPickerResults(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timerId = setTimeout(async () => {
+      setIsLoadingPickerResults(true);
+      setPickerSearchError('');
+
+      try {
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
+          { signal: controller.signal }
+        );
+
+        if (!response.ok) {
+          throw new Error('Unable to search locations on map.');
+        }
+
+        const results = await response.json();
+        setPickerSearchResults(results.slice(0, 5));
+      } catch (searchError) {
+        if (searchError.name !== 'AbortError') {
+          setPickerSearchResults([]);
+          setPickerSearchError(searchError.message || 'Unable to search locations on map.');
+        }
+      } finally {
+        setIsLoadingPickerResults(false);
+      }
+    }, 300);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timerId);
+    };
+  }, [isMapPickerOpen, pickerSearchInput]);
+
   function handleConfigFieldChange(field, value) {
     setParkingLotConfig((currentConfig) => ({
       ...currentConfig,
@@ -142,6 +281,23 @@ function ParkingSetup() {
     if (configFormError) {
       setConfigFormError('');
     }
+  }
+
+  function updateSelectedPoint(nextPoint) {
+    setSelectedPoint(nextPoint);
+    handleConfigFieldChange('parkingLotAddress', formatCoordinates(nextPoint));
+  }
+
+  function handlePickerSearchSelection(result) {
+    const nextPoint = {
+      lat: Number(result.lat),
+      lng: Number(result.lon),
+    };
+
+    updateSelectedPoint(nextPoint);
+    setPickerSearchInput(result.display_name);
+    setPickerSearchResults([]);
+    setPickerSearchError('');
   }
 
   async function saveConfigurations(event) {
@@ -347,14 +503,25 @@ function ParkingSetup() {
                 <label htmlFor="parking-lot-address" className="mb-2 block text-sm font-semibold text-slate-200">
                   Parking lot address
                 </label>
-                <textarea
+                <button
                   id="parking-lot-address"
-                  value={parkingLotConfig.parkingLotAddress}
-                  onChange={(event) => handleConfigFieldChange('parkingLotAddress', event.target.value)}
-                  className="min-h-28 w-full rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-slate-100 outline-none transition focus:border-sky-400"
-                  placeholder="e.g. 123 Main St, Springfield"
-                  required
-                />
+                  type="button"
+                  onClick={() => {
+                    setPickerSearchError('');
+                    setPickerSearchInput('');
+                    setPickerSearchResults([]);
+                    setIsMapPickerOpen(true);
+                  }}
+                  className="flex min-h-20 w-full items-center justify-between rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-left text-slate-100 outline-none transition hover:border-sky-400"
+                >
+                  <span className="text-sm text-slate-100">
+                    {parkingLotConfig.parkingLotAddress || 'Click to select coordinates from map'}
+                  </span>
+                  <span className="ml-4 rounded-lg bg-sky-500 px-3 py-1 text-xs font-semibold text-slate-950">Open map</span>
+                </button>
+                <p className="mt-2 text-xs text-slate-400">
+                  Click to open the map, search a location, then click on the map to pick parking lot coordinates.
+                </p>
               </div>
 
               {parkingLotConfig.configUuid ? (
@@ -381,6 +548,87 @@ function ParkingSetup() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      ) : null}
+
+      {isMapPickerOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/85 px-4 py-8">
+          <div className="w-full max-w-4xl rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-xl font-bold text-white">Pick parking lot location</h3>
+                <p className="mt-1 text-sm text-slate-300">Search and click on the map to set coordinate address.</p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsMapPickerOpen(false)}
+                className="rounded-lg border border-white/15 px-3 py-1 text-sm font-semibold text-slate-200 transition hover:bg-white/10"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mb-3 flex flex-col gap-2">
+              <input
+                type="text"
+                value={pickerSearchInput}
+                onChange={(event) => setPickerSearchInput(event.target.value)}
+                placeholder="Search location on map"
+                className="w-full rounded-xl border border-white/20 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none"
+              />
+
+              {pickerSearchInput.trim() ? (
+                <div className="max-h-44 overflow-y-auto rounded-xl border border-white/15 bg-slate-950/95">
+                  {isLoadingPickerResults ? (
+                    <p className="px-3 py-2 text-xs text-slate-300">Searching suggestions...</p>
+                  ) : pickerSearchResults.length ? (
+                    pickerSearchResults.map((result) => (
+                      <button
+                        key={`${result.place_id}-${result.lat}-${result.lon}`}
+                        type="button"
+                        onClick={() => handlePickerSearchSelection(result)}
+                        className="block w-full border-b border-white/10 px-3 py-2 text-left text-xs text-slate-100 transition hover:bg-slate-800/90 last:border-b-0"
+                      >
+                        {result.display_name}
+                      </button>
+                    ))
+                  ) : (
+                    <p className="px-3 py-2 text-xs text-slate-300">No matches</p>
+                  )}
+                </div>
+              ) : null}
+              {pickerSearchError ? <p className="text-xs text-rose-300">{pickerSearchError}</p> : null}
+            </div>
+
+            <div className="h-[420px] overflow-hidden rounded-xl border border-white/15">
+              <MapContainer center={[pickerMapCenter.lat, pickerMapCenter.lng]} zoom={15} scrollWheelZoom className="h-full w-full">
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                />
+                <RecenterMap center={pickerMapCenter} />
+                <MapClickHandler onSelectPoint={updateSelectedPoint} />
+
+                {selectedPoint ? <Marker position={[selectedPoint.lat, selectedPoint.lng]} /> : null}
+              </MapContainer>
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-slate-300">
+                Selected coordinates:{' '}
+                {selectedPoint ? formatCoordinates(selectedPoint) : 'No point selected yet'}
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsMapPickerOpen(false)}
+                className="rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-400"
+              >
+                Use selected coordinates
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
