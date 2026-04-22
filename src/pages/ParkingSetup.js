@@ -80,10 +80,22 @@ function ParkingSetup() {
             return null;
           }
 
+          if (typeof snapshot === 'string') {
+            return {
+              cameraId: camera.id,
+              cameraName: camera.name,
+              image: snapshot,
+              frame: null,
+              annotations: [],
+            };
+          }
+
           return {
             cameraId: camera.id,
             cameraName: camera.name,
-            image: snapshot,
+            image: snapshot.image,
+            frame: snapshot.frame,
+            annotations: snapshot.annotations,
           };
         })
         .filter(Boolean);

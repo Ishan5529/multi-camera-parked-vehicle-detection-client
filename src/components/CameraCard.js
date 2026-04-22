@@ -61,7 +61,9 @@ function getBoxFromPoints(startPoint, endPoint) {
   };
 }
 
-function getRelativePoint(event, containerElement, videoResolution) {
+function getRelativePoint(event, containerElement, videoResolution, options = {}) {
+  const { clampOutside = false } = options;
+
   if (!containerElement) {
     return null;
   }
@@ -86,7 +88,7 @@ function getRelativePoint(event, containerElement, videoResolution) {
   const localX = event.clientX - rect.left - containedRect.left;
   const localY = event.clientY - rect.top - containedRect.top;
 
-  if (localX < 0 || localY < 0 || localX > containedRect.width || localY > containedRect.height) {
+  if (!clampOutside && (localX < 0 || localY < 0 || localX > containedRect.width || localY > containedRect.height)) {
     return null;
   }
 
@@ -117,6 +119,29 @@ function normalizeRotation(value) {
   }
 
   return ((rotation % 360) + 360) % 360;
+}
+
+function toPixelAnnotations(annotations, frameWidth, frameHeight) {
+  if (!Array.isArray(annotations) || !frameWidth || !frameHeight) {
+    return [];
+  }
+
+  return annotations.map((annotation, index) => {
+    const x = Number(annotation?.x) * frameWidth;
+    const y = Number(annotation?.y) * frameHeight;
+    const width = Number(annotation?.width) * frameWidth;
+    const height = Number(annotation?.height) * frameHeight;
+
+    return {
+      id: annotation?.id || `annotation-${index + 1}`,
+      label: `Box ${index + 1}`,
+      x: Math.round(x),
+      y: Math.round(y),
+      width: Math.round(width),
+      height: Math.round(height),
+      rotation: normalizeRotation(annotation?.rotation),
+    };
+  });
 }
 
 function renderAnnotationBoxes({
@@ -398,7 +423,23 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
 
   useImperativeHandle(ref, () => ({
     captureSnapshot() {
-      return captureVideoFrame(videoRef.current);
+      const image = captureVideoFrame(videoRef.current, { annotations });
+
+      if (!image || !videoRef.current) {
+        return null;
+      }
+
+      const frameWidth = videoRef.current.videoWidth;
+      const frameHeight = videoRef.current.videoHeight;
+
+      return {
+        image,
+        frame: {
+          width: frameWidth,
+          height: frameHeight,
+        },
+        annotations: toPixelAnnotations(annotations, frameWidth, frameHeight),
+      };
     },
   }));
 
@@ -430,7 +471,7 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
       return;
     }
 
-    const point = getRelativePoint(event, modalViewportRef.current, videoResolution);
+    const point = getRelativePoint(event, modalViewportRef.current, videoResolution, { clampOutside: true });
 
     if (!point) {
       return;
@@ -546,7 +587,7 @@ const CameraCard = forwardRef(function CameraCard({ camera, onCameraChange, onRe
       return;
     }
 
-    const point = getRelativePoint(event, modalViewportRef.current, videoResolution);
+    const point = getRelativePoint(event, modalViewportRef.current, videoResolution, { clampOutside: true });
     const nextBox = point ? getBoxFromPoints(drawStartPoint, point) : null;
 
     if (nextBox && nextBox.width > MIN_ANNOTATION_SIZE && nextBox.height > MIN_ANNOTATION_SIZE) {
