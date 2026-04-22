@@ -359,6 +359,14 @@ function Driver() {
                       <p className="text-sm font-semibold">{parkingLot.name}</p>
                       <p className="text-xs">Vacant slots: {parkingLot.vacantSlots}</p>
                       <p className="text-xs">Coordinates: {parkingLot.lat.toFixed(6)}, {parkingLot.lng.toFixed(6)}</p>
+                      <a
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${parkingLot.lat},${parkingLot.lng}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-flex rounded-md bg-sky-500 px-2.5 py-1 text-xs font-semibold text-slate-950 transition hover:bg-sky-400"
+                      >
+                        Navigate on Google Maps
+                      </a>
                     </div>
                   </Popup>
                 </Marker>
